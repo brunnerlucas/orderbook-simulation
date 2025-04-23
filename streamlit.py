@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import deque, defaultdict
+from lob_engine import LimitOrderBook
+import plotly.graph_objects as go
+import time
 
 # --- Order Book Class ---
 class OrderBook:
@@ -134,3 +137,61 @@ if snapshots:
             plot_order_book_snapshot(bid_prices, bid_sizes, ask_prices, ask_sizes)
 else:
     st.warning("No snapshots available. Make sure your file has valid order data.")
+
+
+st.divider()
+st.title('LOB Engine')
+
+# Load Data Function
+@st.cache_data
+def load_data():
+    messages = pd.read_csv('data/AAPL_2012-06-21_34200000_57600000_message_10.csv', header=None)
+    messages.columns = ['Time', 'Type', 'OrderID', 'Size', 'Price', 'Direction']
+    messages['Price'] = messages['Price'] / 10000
+    messages['ReadableTime'] = pd.to_datetime(messages['Time'], unit='s').dt.strftime('%H:%M:%S.%f')
+    return messages
+
+# Load messages
+messages = load_data()
+
+# Sidebar Controls
+st.sidebar.header("Simulation Settings")
+steps = st.sidebar.slider("Number of Steps", min_value=10, max_value=1000, value=100, step=10)
+delay = st.sidebar.slider("Delay per Step (seconds)", min_value=0.0, max_value=1.0, value=0.1, step=0.05)
+
+# Placeholders for live updates
+status_placeholder = st.empty()
+chart_placeholder = st.empty()
+table_placeholder = st.empty()
+
+if st.sidebar.button("Run Live Simulation"):
+    lob = LimitOrderBook()
+
+    for idx, row in messages.iloc[:steps].iterrows():
+        lob.process_message(row)
+
+        # Capture snapshot every 5 steps
+        if idx % 5 == 0 or idx == steps - 1:
+            lob.capture_snapshot(idx)
+
+            snapshots_df = pd.DataFrame(lob.snapshots)
+            executions_df = pd.DataFrame(lob.executions)
+
+            # Update Best Bid/Ask Status
+            latest_bid = snapshots_df['BestBid'].iloc[-1]
+            latest_ask = snapshots_df['BestAsk'].iloc[-1]
+            status_placeholder.markdown(f"### Step {idx}: Best Bid = `{latest_bid}`, Best Ask = `{latest_ask}`")
+
+            # Update Plotly Chart
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=snapshots_df['Step'], y=snapshots_df['BestBid'], name='Best Bid'))
+            fig.add_trace(go.Scatter(x=snapshots_df['Step'], y=snapshots_df['BestAsk'], name='Best Ask'))
+            fig.update_layout(title="Best Bid / Ask Evolution", xaxis_title="Step", yaxis_title="Price ($)")
+            chart_placeholder.plotly_chart(fig)
+
+            # Update Execution Log (last 5 trades)
+            table_placeholder.dataframe(executions_df.tail(5))
+
+        time.sleep(delay)
+
+    st.success("Simulation Complete!")
